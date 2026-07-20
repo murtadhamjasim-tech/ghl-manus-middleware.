@@ -2,11 +2,23 @@
 import os
 import time
 import requests
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime
 
 app = FastAPI()
+
+# إضافة CORS Middleware لحل مشكلة Cross-Origin
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # السماح من أي موقع
+    allow_credentials=True,
+    allow_methods=["*"],  # السماح بجميع الطرق (GET, POST, PUT, DELETE, إلخ)
+    allow_headers=["*"],  # السماح بجميع الـ Headers
+)
 
 # Configuration from environment variables
 MANUS_API_KEY = os.getenv("MANUS_API_KEY")
@@ -115,11 +127,75 @@ def process_verification(data: PaymentVerificationRequest):
         print(f"Error processing verification: {str(e)}")
 
 @app.post("/verify-payment")
-async def verify_payment(request: PaymentVerificationRequest, background_tasks: BackgroundTasks):
-    # We process in background to respond to GHL webhook immediately
-    background_tasks.add_task(process_verification, request)
-    return {"status": "processing", "message": "Verification started in background"}
+async def verify_payment(
+    image_url: str = Form(...),
+    transaction_id: str = Form(...),
+    amount: float = Form(...),
+    contact_id: str = Form(...),
+    background_tasks: BackgroundTasks = None
+):
+    """
+    استقبال بيانات الدفع والتحقق منها باستخدام Manus AI
+    """
+    try:
+        print(f"[{datetime.now()}] استقبال طلب تحقق من الدفع")
+        print(f"Transaction ID: {transaction_id}")
+        print(f"Amount: {amount}")
+        print(f"Contact ID: {contact_id}")
+        print(f"Image URL: {image_url}")
+
+        # إنشاء كائن الطلب
+        request_data = PaymentVerificationRequest(
+            image_url=image_url,
+            transaction_id=transaction_id,
+            amount=amount,
+            contact_id=contact_id
+        )
+
+        # معالجة التحقق في الخلفية
+        if background_tasks:
+            background_tasks.add_task(process_verification, request_data)
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "status": "processing",
+                "message": "تم استقبال البيانات وجاري التحقق منها",
+                "transaction_id": transaction_id,
+                "contact_id": contact_id,
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+    except Exception as e:
+        print(f"خطأ: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": str(e),
+                "message": "حدث خطأ أثناء معالجة الطلب",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+@app.options("/{full_path:path}")
+async def options_handler(full_path: str):
+    """معالج OPTIONS للـ CORS preflight requests"""
+    return JSONResponse(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        }
+    )
 
 @app.get("/")
 def health_check():
-    return {"status": "ok", "service": "GHL-Manus-Middleware"}
+    return {
+        "status": "ok",
+        "service": "GHL-Manus-Middleware",
+        "timestamp": datetime.now().isoformat()
+    }
